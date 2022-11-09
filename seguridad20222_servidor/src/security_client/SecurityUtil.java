@@ -18,6 +18,9 @@ import javax.crypto.spec.SecretKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 
 class SecurityUtil {
+  static long getName() {
+    return Thread.currentThread().getId();
+  }
   
   //read_kplus
   static PublicKey getPublicKey(String keyArchive) throws Exception {
@@ -37,7 +40,7 @@ class SecurityUtil {
     publicSignature.update(m.getBytes(StandardCharsets.UTF_8));
     boolean isVerified = publicSignature.verify(signature);
     long time_elapsed = System.nanoTime() - time_start;
-    System.out.println("(time) signature verification in: "+time_elapsed+" ns");
+    System.out.println(getName()+" (time) 0 signature verification : "+time_elapsed);
     return isVerified;
   }
 
@@ -60,17 +63,17 @@ class SecurityUtil {
     encryptor.init(Cipher.ENCRYPT_MODE, k, iv);
     byte[] c = encryptor.doFinal(m);
     long time_elapsed = System.nanoTime() - time_start;
-    System.out.println("(time) encrypted message in: "+time_elapsed+" ns");
+    System.out.println(getName()+" (time) 2 encrypted message      : "+time_elapsed);
     return c;
   }
   //sdec
   static byte[] symmDecrypt(byte[] c, SecretKey k, IvParameterSpec iv) throws Exception {
-    long time_start = System.nanoTime();
+    //long time_start = System.nanoTime();
     Cipher encryptor = Cipher.getInstance("AES/CBC/PKCS5Padding");
     encryptor.init(Cipher.DECRYPT_MODE, k, iv);
     byte[] m = encryptor.doFinal(c);
-    long time_elapsed = System.nanoTime() - time_start;
-    System.out.println("(time) decrypted message in: "+time_elapsed+" ns");
+    //long time_elapsed = System.nanoTime() - time_start;
+    //System.out.println("(time) decrypted message in: "+time_elapsed+" ns");
     return m;
   }
 
@@ -81,12 +84,14 @@ class SecurityUtil {
     macFxn.init(k);
     byte[] tag = macFxn.doFinal(m);
     long time_elapsed = System.nanoTime() - time_start;
-    System.out.println("(time) hash-mac'd in: "+time_elapsed+" ns");
+    System.out.println(getName()+" (time) 3 hash-mac'd             : "+time_elapsed);
     return tag;
   }
   //checkInt
   static boolean verifyTag(byte[] m, SecretKey k, byte[] tag) throws Exception {
-    byte[] tag_0 = hmac(m,k);
+    Mac macFxn = Mac.getInstance("HMACSHA256");
+    macFxn.init(k);
+    byte[] tag_0 = macFxn.doFinal(m);
     if(tag_0.length != tag.length) {
       return false; }
     for(int i = 0; i < tag_0.length; i++) {
