@@ -1,219 +1,61 @@
 package security_client;
 
-import java.math.BigInteger;
-import java.net.*;
-import java.io.*;
+import java.net.Socket;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.io.BufferedReader;
 import java.nio.charset.StandardCharsets;
-import java.security.*;
-import java.security.spec.*;
+import java.math.BigInteger;
+
+import java.security.PublicKey;
+import java.security.SecureRandom;
 import javax.crypto.SecretKey;
-import javax.crypto.Cipher;
-import javax.crypto.Mac;
 import javax.crypto.spec.IvParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
-//import seguridad20222_servidor.SecurityFunctions;
 
 public class ClientMain {
-  public static void main(String[] args) throws Exception {
-    PublicKey publicKey = null;
-    PrintWriter out = null;
-    BufferedReader in = null;
-    //create socket & connect to server
-    Socket clientSocket = new Socket("localhost",4030);
-    //get our output stream for writing to
-    out = new PrintWriter(clientSocket.getOutputStream(),true);
-    //get server input stream (bytes->characters -> buffer);
-    in = new BufferedReader(
-      new InputStreamReader(clientSocket.getInputStream()));
+  static Socket socket = null;
+  static PrintWriter out = null;
+  static BufferedReader in = null;
+  static PublicKey serverPubKey = null;
+  static SecretKey encKey = null;
+  static SecretKey authKey = null;
 
-    System.out.println("connected to server");
-    publicKey = readPublicKey("datos_asim_srv.pub");
-    System.out.println("got public key");
-
-    //start communication
-    out.println("SECURE INIT");
-
-    //get G, P, G^x from server
-    String G_str = in.readLine();
-    BigInteger g = new BigInteger(G_str);
-    System.out.println("G: " + G_str);
-    String P_str = in.readLine();
-    BigInteger p = new BigInteger(P_str);
-    System.out.println("P: " + P_str);
-    String Gx_str = in.readLine();
-    BigInteger gx = new BigInteger(Gx_str);
-    System.out.println("G^x: " + Gx_str);
-
-    //verify signature
-    String signature_str = in.readLine();
-    System.out.println("signature: " + signature_str);
-    String GPGx_str = G_str + "," + P_str + "," + Gx_str;
-    if(checkSignature(publicKey,str2byte(signature_str),GPGx_str)) {
-      out.println("OK");
-      System.out.println("signature is correct");
+  static void serverConnect(String hostname, int port) throws Exception {
+    socket = new Socket(hostname,port);
+    out = new PrintWriter(socket.getOutputStream(),true);
+    in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+  }
+  static void sendStr(String label, String s) throws Exception{
+    out.println(s);
+    System.out.println("--> "+label+": "+s);
+  }
+  static String rcvStr(String label) throws Exception{
+    String s = in.readLine();
+    //System.out.println("<-- "+label+": "+s);
+    return s;
+  }
+  static void authenticate(boolean verified) throws Exception{
+    if(verified) {
+      sendStr("verified","OK");
     } else {
-      out.println("ERROR");
-      System.out.println("signature is wrong");
-      clientSocket.close();
-      System.exit(1);
+      sendStr("verified","ERROR");
+      socket.close();
+      System.exit(0);
     }
-
-    //generate Y
-    SecureRandom r = new SecureRandom();
-    int y_int = Math.abs(r.nextInt());
-    BigInteger y = BigInteger.valueOf(Long.valueOf(y_int));
-
-    //compute g^y, send it
-    BigInteger gy = g.modPow(y,p);
-    String gy_str = gy.toString();
-    System.out.println("G^y: "+gy_str);
-    out.println(gy_str);
-
-    //compute g^{xy} and the session,mac keys it creates
-    BigInteger gxy = gx.modPow(y,p);
-    String gxy_str = gxy.toString();
-    System.out.println("G^xy: "+gxy_str);
-    SecretKey sessionKey = makeSessionKey(gxy_str);
-    SecretKey macKey = makeMACKey(gxy_str);
-
-    //create the request
-    int req = 9;
-    byte[] req_bytes = Integer.toString(req).getBytes();
-
-    //generate the nonce
-    byte[] iv_bytes = generateIVBytes();
-    String iv_str = byte2str(iv_bytes);
-    IvParameterSpec iv = new IvParameterSpec(iv_bytes);
-    System.out.println("request: "+req);
-
-    //encrypt the req with the session key and iv, send it
-    byte[] encReq = symmEncrypt(req_bytes,sessionKey,iv);
-    String encReq_str = byte2str(encReq);
-    System.out.println("encrypted request: "+encReq_str);
-    out.println(encReq_str);
-
-    //hmac the session key, send that
-    byte[] mac = hmac(req_bytes,macKey);
-    String mac_str = byte2str(mac);
-    System.out.println("mac: "+mac_str);
-    out.println(mac_str);
-
-    //send the nonce
-    System.out.println("iv: "+iv_str);
-    out.println(iv_str);
-
-    //receive the server's responses
-    String okay = in.readLine();
-    String encResp_str = in.readLine();
-    String respMac_str = in.readLine();
-    String respIv_str = in.readLine();
-    System.out.println("ok/error: "+okay);
-    System.out.println("encrypted resp: "+encResp_str);
-    System.out.println("resp mac: "+respMac_str);
-    System.out.println("reponse IV: "+respIv_str);
-
-    //decrypt server's response
-    IvParameterSpec respIv = new IvParameterSpec(str2byte(respIv_str));
-    byte[] resp_bytes = symmDecrypt(str2byte(encResp_str),sessionKey,respIv);
-    int resp = Integer.parseInt(new String(resp_bytes,StandardCharsets.UTF_8));
-    System.out.println("response: "+resp);
-
-    //verify server's HMAC
-    if(verifyMAC(resp_bytes,macKey,str2byte(respMac_str))) {
-      out.println("OKAY");
-    } else {
-      out.println("ERROR");
-    }
-
-    //exit
-    clientSocket.close();
-    System.exit(1);
+  }
+  static BigInteger getG2Y(BigInteger g, BigInteger y, BigInteger p) {
+    long time_start = System.nanoTime();
+    BigInteger g2y = g.modPow(y,p);
+    long time_elapsed = System.nanoTime() - time_start;
+    System.out.println("(time) generated G^y in: "+time_elapsed);
+    return g2y;
   }
 
-
-
-
-  /*temp, just copied SecurityFunctions's methods*/
-
-  //read_kplus
-  static PublicKey readPublicKey(String keyArchive) throws Exception {
-    PublicKey key = null;
-    FileInputStream stream = new FileInputStream(keyArchive);
-    byte[] bytes = new byte[(int)(new File(keyArchive)).length()];
-    stream.read(bytes);
-    stream.close();
-    KeyFactory factory = KeyFactory.getInstance("RSA");
-    return factory.generatePublic(new X509EncodedKeySpec(bytes));
-  }
-
-  //checkSignature
- static boolean checkSignature(PublicKey key, byte[] signature, String m) throws Exception {
-    Signature publicSignature = Signature.getInstance("SHA256withRSA");
-    publicSignature.initVerify(key);
-    publicSignature.update(m.getBytes(StandardCharsets.UTF_8));
-    return publicSignature.verify(signature);
-  }
-
-  //csk1, use first half of seed/key
-  static SecretKey makeSessionKey(String seed) throws Exception {
-    byte[] byte_seed = seed.trim().getBytes(StandardCharsets.UTF_8);
-    byte[] hash = MessageDigest.getInstance("SHA-512").digest(byte_seed);
-    byte[] hash_32 = new byte[32];
-    for(int i = 0; i < 32; i++) {
-      hash_32[i] = hash[i];
-    }
-    return new SecretKeySpec(hash_32,"AES");
-  }
-  //csk2, use 2nd half of seed/key
-  static SecretKey makeMACKey(String seed) throws Exception {
-    byte[] byte_seed = seed.trim().getBytes(StandardCharsets.UTF_8);
-    byte[] hash = MessageDigest.getInstance("SHA-512").digest(byte_seed);
-    byte[] hash_32 = new byte[32];
-    for(int i = 32; i < 64; i++) {
-      hash_32[i-32] = hash[i];
-    }
-    return new SecretKeySpec(hash_32,"AES");
-  }
-
-  //senc
-  static byte[] symmEncrypt(byte[] m, SecretKey k, IvParameterSpec iv) throws Exception {
-    Cipher encryptor = Cipher.getInstance("AES/CBC/PKCS5Padding");
-    encryptor.init(Cipher.ENCRYPT_MODE, k, iv);
-    byte[] c = encryptor.doFinal(m);
-    return c;
-  }
-  //sdec
-  static byte[] symmDecrypt(byte[] c, SecretKey k, IvParameterSpec iv) throws Exception {
-    Cipher decryptor = Cipher.getInstance("AES/CBC/PKCS5Padding");
-    decryptor.init(Cipher.DECRYPT_MODE, k, iv);
-    byte[] m = decryptor.doFinal(c);
-    return m;
-  }
-  //hmac
-  static byte[] hmac(byte[] m, SecretKey k) throws Exception {
-    Mac mac = Mac.getInstance("HMACSHA256");
-    mac.init(k);
-    return mac.doFinal(m);
-  }
-  static boolean verifyMAC(byte[] m, SecretKey k, byte[] mac) throws Exception {
-    byte[] mac_o = hmac(m,k);
-    if(mac_o.length != mac.length) {
-      return false;
-    }
-    for(int i = 0; i < mac_o.length; i++) {
-      if(mac_o[i] != mac[i]) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  //from SrvThread
+  //helpers from SrvThread
   static byte[] str2byte(String s) {
     byte[] b = new byte[s.length()/2];
     for(int i = 0; i < b.length; i++) {
-      b[i] = (byte) Integer.parseInt(s.substring(i*2,(i+1)*2),16);
-    }
+      b[i] = (byte) Integer.parseInt(s.substring(i*2,(i+1)*2),16); }
     return b;
   }
   static String byte2str(byte[] b) {
@@ -221,13 +63,79 @@ public class ClientMain {
     for(int i = 0; i < b.length; i ++) {
       char b_i = (char)b[i];
       String g = Integer.toHexString( b_i & 0x00ff );
-      s += (g.length() == 1 ? "0" : "") + g;
-    }
+      s += (g.length() == 1 ? "0" : "") + g; }
     return s;
   }
-  static byte[] generateIVBytes() {
-    byte[] iv = new byte[16];
-    new SecureRandom().nextBytes(iv);
-    return iv;
+
+  public static void main(String[] args) throws Exception {
+    //get server's public key
+    serverPubKey = SecurityUtil.getPublicKey("datos_asim_srv.pub");
+
+    //connect to server
+    serverConnect("localhost",4030);
+    sendStr("connection start","SECURE INIT");
+
+    //get G, P, G^x, signature from server
+    String g_str = rcvStr("g");
+    String p_str = rcvStr("p");
+    String g2x_str = rcvStr("g2x");
+    String sig_str = rcvStr("signature");
+    BigInteger g = new BigInteger(g_str);
+    BigInteger p = new BigInteger(p_str);
+    BigInteger g2x = new BigInteger(g2x_str);
+    byte[] sig_by = str2byte(sig_str);
+
+    //verify signature
+    String m = g_str+","+p_str+","+g2x_str;
+    authenticate(SecurityUtil.verifySig(serverPubKey,sig_by,m));
+
+    //choose y, send g^y
+    int y_int = Math.abs(new SecureRandom().nextInt());
+    BigInteger y = BigInteger.valueOf(Long.valueOf(y_int));
+    sendStr("g2y",getG2Y(g,y,p).toString());
+
+    //compute g^{xy}, derive symmetric keys from it
+    BigInteger g2xy = g2x.modPow(y,p);
+    String g2xy_str = g2xy.toString();
+    SecretKey encKey = SecurityUtil.makeSecretKey(g2xy_str,0,32);
+    SecretKey authKey = SecurityUtil.makeSecretKey(g2xy_str,32,32);
+
+    //create the request
+    int req = 9;
+    byte[] req_by = Integer.toString(req).getBytes();
+    //generate the nonce
+    byte[] reqIv_by = SecurityUtil.generateIVBytes();
+    String reqIv_str = byte2str(reqIv_by);
+    IvParameterSpec reqIv = new IvParameterSpec(reqIv_by);
+    //encrypt request with encryption key and iv
+    byte[] encReq_by = SecurityUtil.symmEncrypt(req_by,encKey,reqIv);
+    String encReq_str = byte2str(encReq_by);
+    //hash-mac request with authenticaation key
+    byte[] clientTag_by = SecurityUtil.hmac(req_by,authKey);
+    String clientTag_str = byte2str(clientTag_by);
+
+    //send encrypted request, hmac tag, nonce
+    sendStr("encrypted request",encReq_str);
+    sendStr("hmac tag",clientTag_str);
+    sendStr("iv",reqIv_str);
+
+    //get server responses
+    String okay = rcvStr("client hmac tag verified");
+    String encResp_str = rcvStr("encrypted response");
+    String serverTag_str = rcvStr("server hmac tag");
+    String respIv_str = rcvStr("iv");
+    IvParameterSpec respIv = new IvParameterSpec(str2byte(respIv_str));
+    byte[] serverTag_by = str2byte(serverTag_str);
+
+    //decrypt server's message
+    byte[] resp_by = SecurityUtil.symmDecrypt(str2byte(encResp_str),encKey,respIv);
+    int resp = Integer.parseInt(new String(resp_by,StandardCharsets.UTF_8));
+    System.out.println("--- decrypted server response: " + resp);
+
+    //verify server's HMAC tag
+    authenticate(SecurityUtil.verifyTag(resp_by,authKey,serverTag_by));
+
+    //exit
+    socket.close();
   }
 }
